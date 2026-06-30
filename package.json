@@ -1,0 +1,17 @@
+{
+  "name": "harness",
+  "version": "0.1.0",
+  "description": "Local coding agent harness — Bun + Ollama + Markdown",
+  "module": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch run src/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
