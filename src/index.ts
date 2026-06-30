@@ -60,6 +60,9 @@ async function main() {
     client,
     maxIterations: HARNESS_MAX_ITER,
     keepLast: HARNESS_KEEP_LAST,
+    // Stream the final answer — print each token as it arrives.
+    // Tool-call iterations still use non-streaming internally.
+    onChunk: (chunk) => process.stdout.write(chunk),
   });
 
   await agent.initialize();
@@ -98,11 +101,13 @@ async function main() {
         process.exit(0);
       }
 
-      // Run the agent turn. The loop handles tool calls internally;
-      // we only get the final answer back here.
+      // Run the agent turn. The loop handles tool calls internally.
+      // onChunk streams the final answer token-by-token; agent.turn() returns
+      // the full accumulated text, but we've already printed it — just add newlines.
       try {
-        const response = await agent.turn(trimmed);
-        console.log(`\n${bold("Agent:")} ${response}\n`);
+        process.stdout.write(`\n${bold("Agent:")} `);
+        await agent.turn(trimmed);
+        process.stdout.write("\n\n");
       } catch (err) {
         console.error(`\n${red("Loop error:")} ${String(err)}\n`);
       }
