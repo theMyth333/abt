@@ -60,9 +60,12 @@ export class OllamaClient {
     return data;
   }
 
-  // Stream a chat request. Yields content chunks as they arrive; the final chunk
-  // (done: true) carries tool_calls if the model requested any.
-  // Usage: for await (const chunk of client.chatStream(req)) { process.stdout.write(chunk.message.content) }
+  // Stream a chat request. Yields content and thinking chunks as they arrive;
+  // the final chunk (done: true) carries tool_calls if the model requested any.
+  // Usage: for await (const chunk of client.chatStream(req)) {
+  //   process.stdout.write(chunk.message.content)      // answer text
+  //   process.stdout.write(chunk.message.thinking ?? "") // reasoning (thinking models only)
+  // }
   async *chatStream(
     request: Omit<ChatRequest, "model" | "stream">
   ): AsyncGenerator<ChatResponse> {

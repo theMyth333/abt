@@ -27,6 +27,8 @@ export interface AgentConfig {
   // When set, called with each streamed content chunk during the final answer.
   // If omitted, the loop falls back to non-streaming.
   onChunk?: (chunk: string) => void;
+  // When set, called with each streamed thinking chunk (thinking models only).
+  onThinkingChunk?: (chunk: string) => void;
 }
 
 export class AgentLoop {
@@ -34,6 +36,7 @@ export class AgentLoop {
   private readonly maxIterations: number;
   private readonly keepLast: number;
   private readonly onChunk?: (chunk: string) => void;
+  private readonly onThinkingChunk?: (chunk: string) => void;
 
   // messages is the live in-memory conversation history.
   // It starts with the system message and grows with each turn.
@@ -45,6 +48,7 @@ export class AgentLoop {
     this.maxIterations = config.maxIterations ?? 15;
     this.keepLast = config.keepLast ?? 10;
     this.onChunk = config.onChunk;
+    this.onThinkingChunk = config.onThinkingChunk;
     this.transcript = new SessionTranscript();
   }
 
@@ -156,6 +160,9 @@ export class AgentLoop {
             messages: fittedMessages,
             tools: toolDefinitions,
           })) {
+            if (chunk.message.thinking && this.onThinkingChunk) {
+              this.onThinkingChunk(chunk.message.thinking);
+            }
             if (chunk.message.content) {
               finalContent += chunk.message.content;
               this.onChunk(chunk.message.content);

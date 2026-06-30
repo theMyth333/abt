@@ -60,9 +60,27 @@ async function main() {
     client,
     maxIterations: HARNESS_MAX_ITER,
     keepLast: HARNESS_KEEP_LAST,
-    // Stream the final answer — print each token as it arrives.
-    // Tool-call iterations still use non-streaming internally.
-    onChunk: (chunk) => process.stdout.write(chunk),
+    // Stream thinking and answer tokens. Thinking is rendered dimmed inside a
+    // <think> block; the block is closed automatically when the answer begins.
+    ...(() => {
+      let thinkOpen = false;
+      return {
+        onThinkingChunk: (chunk: string) => {
+          if (!thinkOpen) {
+            process.stdout.write(dim("<think>\n"));
+            thinkOpen = true;
+          }
+          process.stdout.write(dim(chunk));
+        },
+        onChunk: (chunk: string) => {
+          if (thinkOpen) {
+            process.stdout.write(dim("\n</think>\n\n"));
+            thinkOpen = false;
+          }
+          process.stdout.write(chunk);
+        },
+      };
+    })(),
   });
 
   await agent.initialize();
