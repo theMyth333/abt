@@ -24,12 +24,19 @@ export interface AgentConfig {
   client: OllamaClient;
   maxIterations?: number;
   keepLast?: number;
+  // When set, called with each streamed content chunk during the final answer.
+  // If omitted, the loop falls back to non-streaming.
+  onChunk?: (chunk: string) => void;
+  // When set, called with each streamed thinking chunk (thinking models only).
+  onThinkingChunk?: (chunk: string) => void;
 }
 
 export class AgentLoop {
   private readonly client: OllamaClient;
   private readonly maxIterations: number;
   private readonly keepLast: number;
+  private readonly onChunk?: (chunk: string) => void;
+  private readonly onThinkingChunk?: (chunk: string) => void;
 
   // messages is the live in-memory conversation history.
   // It starts with the system message and grows with each turn.
@@ -40,6 +47,8 @@ export class AgentLoop {
     this.client = config.client;
     this.maxIterations = config.maxIterations ?? 15;
     this.keepLast = config.keepLast ?? 10;
+    this.onChunk = config.onChunk;
+    this.onThinkingChunk = config.onThinkingChunk;
     this.transcript = new SessionTranscript();
   }
 
@@ -79,10 +88,9 @@ export class AgentLoop {
         keepLast: this.keepLast,
       });
 
-      // Call Ollama. stream: false gives us the complete response in one go.
-      // To switch to streaming: set stream: true and consume the NDJSON chunks —
-      // each chunk is a partial ChatResponse; accumulate message.content
-      // and watch for done: true to know when tool_calls are finalized.
+      // Call Ollama. On the final-answer turn (when onChunk is set) we stream so
+      // the caller can print tokens as they arrive. Tool-call turns always use
+      // non-streaming because we need the complete tool_calls array up front.
       let response;
       try {
         response = await this.client.chat({
@@ -140,7 +148,35 @@ export class AgentLoop {
 
       // ── Final answer branch ────────────────────────────────────────────────
       // No tool calls means this is the model's final response to the user.
-      const finalContent = assistantMsg.content ?? "(no response)";
+      // If onChunk is set, re-run as a streaming call so the caller can print
+      // tokens live. The non-streaming response we already have is discarded
+      // only in this branch — it was needed above to detect tool_calls first.
+      let finalContent: string;
+
+      if (this.onChunk) {
+        finalContent = "";
+        try {
+          for await (const chunk of this.client.chatStream({
+            messages: fittedMessages,
+            tools: toolDefinitions,
+          })) {
+            if (chunk.message.thinking && this.onThinkingChunk) {
+              this.onThinkingChunk(chunk.message.thinking);
+            }
+            if (chunk.message.content) {
+              finalContent += chunk.message.content;
+              this.onChunk(chunk.message.content);
+            }
+          }
+        } catch (err) {
+          const errMsg = `Failed to stream from Ollama: ${String(err)}`;
+          console.error(`[loop] ${errMsg}`);
+          return errMsg;
+        }
+      } else {
+        finalContent = assistantMsg.content ?? "(no response)";
+      }
+
       this.messages.push({ role: "assistant", content: finalContent });
       await this.transcript.writeAssistant(finalContent);
 

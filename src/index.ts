@@ -60,6 +60,27 @@ async function main() {
     client,
     maxIterations: HARNESS_MAX_ITER,
     keepLast: HARNESS_KEEP_LAST,
+    // Stream thinking and answer tokens. Thinking is rendered dimmed inside a
+    // <think> block; the block is closed automatically when the answer begins.
+    ...(() => {
+      let thinkOpen = false;
+      return {
+        onThinkingChunk: (chunk: string) => {
+          if (!thinkOpen) {
+            process.stdout.write(dim("<think>\n"));
+            thinkOpen = true;
+          }
+          process.stdout.write(dim(chunk));
+        },
+        onChunk: (chunk: string) => {
+          if (thinkOpen) {
+            process.stdout.write(dim("\n</think>\n\n"));
+            thinkOpen = false;
+          }
+          process.stdout.write(chunk);
+        },
+      };
+    })(),
   });
 
   await agent.initialize();
@@ -98,11 +119,13 @@ async function main() {
         process.exit(0);
       }
 
-      // Run the agent turn. The loop handles tool calls internally;
-      // we only get the final answer back here.
+      // Run the agent turn. The loop handles tool calls internally.
+      // onChunk streams the final answer token-by-token; agent.turn() returns
+      // the full accumulated text, but we've already printed it — just add newlines.
       try {
-        const response = await agent.turn(trimmed);
-        console.log(`\n${bold("Agent:")} ${response}\n`);
+        process.stdout.write(`\n${bold("Agent:")} `);
+        await agent.turn(trimmed);
+        process.stdout.write("\n\n");
       } catch (err) {
         console.error(`\n${red("Loop error:")} ${String(err)}\n`);
       }

@@ -44,6 +44,7 @@ export type MessageRole = "system" | "user" | "assistant" | "tool";
 export interface ChatMessage {
   role: MessageRole;
   content: string;
+  thinking?: string;               // only on assistant messages from thinking models
   tool_calls?: ToolCall[];         // only on assistant messages
   tool_call_id?: string;           // only on tool messages (matches ToolCall.id)
   name?: string;                   // tool name, used on tool-role messages
