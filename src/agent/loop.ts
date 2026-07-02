@@ -19,6 +19,7 @@ import { fit } from "./contextManager.ts";
 import { buildSystemPrompt } from "./systemPrompt.ts";
 import { SessionTranscript } from "../storage/session.ts";
 import { getMemorySummary, ensureMemoryFile } from "../storage/memory.ts";
+import { getSkillsSummary, ensureSkillsFile } from "../storage/skills.ts";
 import type { McpClientManager } from "../mcp/client.ts";
 
 export interface AgentConfig {
@@ -60,11 +61,14 @@ export class AgentLoop {
   // and set up the system message. Call this once before the first turn.
   async initialize(): Promise<void> {
     await ensureMemoryFile();
+    await ensureSkillsFile();
     const memorySummary = await getMemorySummary();
+    const skillsSummary = await getSkillsSummary();
 
     const systemContent = buildSystemPrompt({
       cwd: process.cwd(),
       memorySummary,
+      skillsSummary,
       model: this.client.getModel(),
     });
 
