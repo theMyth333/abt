@@ -10,6 +10,7 @@ import { listDirDefinition, listDirHandler } from "./listDir.ts";
 import { runCommandDefinition, runCommandHandler } from "./runCommand.ts";
 import { saveMemoryDefinition, saveMemoryHandler } from "./saveMemory.ts";
 import { saveSkillDefinition, saveSkillHandler } from "./saveSkill.ts";
+import { useSkillDefinition, useSkillHandler } from "./useSkill.ts";
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<string>;
 
@@ -26,6 +27,7 @@ export const toolRegistry: Record<string, RegisteredTool> = {
   run_command: { definition: runCommandDefinition, handler: runCommandHandler },
   save_memory: { definition: saveMemoryDefinition, handler: saveMemoryHandler },
   save_skill: { definition: saveSkillDefinition, handler: saveSkillHandler },
+  use_skill: { definition: useSkillDefinition, handler: useSkillHandler },
 };
 
 // Flat array of just the definitions — this is what gets sent in the `tools` field of /api/chat.

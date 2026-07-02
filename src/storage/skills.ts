@@ -32,7 +32,7 @@ export async function readSkills(): Promise<string | null> {
 
 // Parse SKILLS.md into a map of skill name → full skill block text.
 // Skills are delimited by `## SkillName` headings.
-function parseSkills(content: string): Map<string, string> {
+export function parseSkills(content: string): Map<string, string> {
   const map = new Map<string, string>();
   // Split on level-2 headings; skip the preamble before the first heading
   const sections = content.split(/^## /m);
