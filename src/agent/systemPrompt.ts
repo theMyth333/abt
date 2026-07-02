@@ -6,6 +6,7 @@
 export interface SystemPromptContext {
   cwd: string;
   memorySummary: string;
+  skillsSummary: string;
   model: string;
 }
 
@@ -29,6 +30,10 @@ Model: ${ctx.model}
 ## Memory (from previous sessions)
 
 ${ctx.memorySummary}
+
+## Skills (reusable routines)
+
+${ctx.skillsSummary}
 
 ---
 Use the tools available to you. When you have enough information to answer, answer directly.`;
