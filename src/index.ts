@@ -6,6 +6,8 @@
 import * as readline from "node:readline";
 import { OllamaClient } from "./ollama/client.ts";
 import { AgentLoop } from "./agent/loop.ts";
+import { McpClientManager } from "./mcp/client.ts";
+import type { McpServerConfig } from "./mcp/types.ts";
 
 // ── Config from environment ──────────────────────────────────────────────────
 const OLLAMA_HOST = process.env.OLLAMA_HOST ?? "http://localhost:11434";
@@ -13,6 +15,19 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "gemma4:12b";
 const HARNESS_NUM_CTX = parseInt(process.env.HARNESS_NUM_CTX ?? "32768", 10);
 const HARNESS_MAX_ITER = parseInt(process.env.HARNESS_MAX_ITER ?? "15", 10);
 const HARNESS_KEEP_LAST = parseInt(process.env.HARNESS_KEEP_LAST ?? "10", 10);
+
+function parseMcpServers(): McpServerConfig[] {
+  const raw = process.env.MCP_SERVERS;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error("MCP_SERVERS must be a JSON array");
+    return parsed as McpServerConfig[];
+  } catch (err) {
+    console.error(`[mcp] Invalid MCP_SERVERS env var: ${String(err)}`);
+    return [];
+  }
+}
 
 // ── ANSI helpers (minimal — avoids pulling in a dependency) ──────────────────
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -56,10 +71,24 @@ async function main() {
   }
 
   // ── Initialize agent loop ─────────────────────────────────────────────────
+  const mcpServers = parseMcpServers();
+  const mcpManager = new McpClientManager();
+
+  if (mcpServers.length > 0) {
+    process.stdout.write(dim("  Connecting to MCP servers... "));
+    await mcpManager.connect(mcpServers);
+    if (mcpManager.connectedCount > 0) {
+      console.log(green("OK") + dim(` (${mcpManager.getSummary()})`));
+    } else {
+      console.log(red("FAILED") + dim(" (all servers failed to connect)"));
+    }
+  }
+
   const agent = new AgentLoop({
     client,
     maxIterations: HARNESS_MAX_ITER,
     keepLast: HARNESS_KEEP_LAST,
+    mcpManager: mcpManager.connectedCount > 0 ? mcpManager : undefined,
     // Stream thinking and answer tokens. Thinking is rendered dimmed inside a
     // <think> block; the block is closed automatically when the answer begins.
     ...(() => {
@@ -97,8 +126,9 @@ async function main() {
   });
 
   // Clean exit on Ctrl+C
-  rl.on("SIGINT", () => {
+  rl.on("SIGINT", async () => {
     console.log(dim("\n\n  Goodbye.\n"));
+    await mcpManager.close();
     process.exit(0);
   });
 
@@ -116,6 +146,7 @@ async function main() {
       if (trimmed === "exit" || trimmed === "quit") {
         console.log(dim("\n  Goodbye.\n"));
         rl.close();
+        await mcpManager.close();
         process.exit(0);
       }
 

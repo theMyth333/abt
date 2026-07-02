@@ -13,12 +13,13 @@
 // to produce a final answer, without returning to the user in between.
 
 import { OllamaClient } from "../ollama/client.ts";
-import type { ChatMessage, ToolCall } from "../ollama/types.ts";
+import type { ChatMessage, ToolCall, ToolDefinition } from "../ollama/types.ts";
 import { toolRegistry, toolDefinitions } from "../tools/index.ts";
 import { fit } from "./contextManager.ts";
 import { buildSystemPrompt } from "./systemPrompt.ts";
 import { SessionTranscript } from "../storage/session.ts";
 import { getMemorySummary, ensureMemoryFile } from "../storage/memory.ts";
+import type { McpClientManager } from "../mcp/client.ts";
 
 export interface AgentConfig {
   client: OllamaClient;
@@ -29,6 +30,7 @@ export interface AgentConfig {
   onChunk?: (chunk: string) => void;
   // When set, called with each streamed thinking chunk (thinking models only).
   onThinkingChunk?: (chunk: string) => void;
+  mcpManager?: McpClientManager;
 }
 
 export class AgentLoop {
@@ -37,6 +39,7 @@ export class AgentLoop {
   private readonly keepLast: number;
   private readonly onChunk?: (chunk: string) => void;
   private readonly onThinkingChunk?: (chunk: string) => void;
+  private readonly mcpManager?: McpClientManager;
 
   // messages is the live in-memory conversation history.
   // It starts with the system message and grows with each turn.
@@ -49,6 +52,7 @@ export class AgentLoop {
     this.keepLast = config.keepLast ?? 10;
     this.onChunk = config.onChunk;
     this.onThinkingChunk = config.onThinkingChunk;
+    this.mcpManager = config.mcpManager;
     this.transcript = new SessionTranscript();
   }
 
@@ -88,6 +92,12 @@ export class AgentLoop {
         keepLast: this.keepLast,
       });
 
+      // Build the full tool list: built-ins + any MCP tools
+      const allTools: ToolDefinition[] = [
+        ...toolDefinitions,
+        ...(this.mcpManager?.getToolDefinitions() ?? []),
+      ];
+
       // Call Ollama. On the final-answer turn (when onChunk is set) we stream so
       // the caller can print tokens as they arrive. Tool-call turns always use
       // non-streaming because we need the complete tool_calls array up front.
@@ -95,7 +105,7 @@ export class AgentLoop {
       try {
         response = await this.client.chat({
           messages: fittedMessages,
-          tools: toolDefinitions,
+          tools: allTools,
         });
       } catch (err) {
         const errMsg = `Failed to call Ollama: ${String(err)}`;
@@ -158,7 +168,7 @@ export class AgentLoop {
         try {
           for await (const chunk of this.client.chatStream({
             messages: fittedMessages,
-            tools: toolDefinitions,
+            tools: allTools,
           })) {
             if (chunk.message.thinking && this.onThinkingChunk) {
               this.onThinkingChunk(chunk.message.thinking);
@@ -208,6 +218,24 @@ export class AgentLoop {
     call: ToolCall
   ): Promise<{ content: string; isError: boolean }> {
     const toolName = call.function.name;
+
+    console.error(`[tool] Calling ${toolName}(${JSON.stringify(call.function.arguments)})`);
+
+    // Route MCP tools to the manager
+    if (toolName.startsWith("mcp__")) {
+      if (!this.mcpManager) {
+        return { content: `No MCP manager available to handle tool "${toolName}"`, isError: true };
+      }
+      try {
+        const result = await this.mcpManager.callTool(toolName, call.function.arguments);
+        return { content: result, isError: false };
+      } catch (err) {
+        const errMsg = `MCP tool "${toolName}" threw an error: ${String(err)}`;
+        console.error(`[tool] ${errMsg}`);
+        return { content: errMsg, isError: true };
+      }
+    }
+
     const registered = toolRegistry[toolName];
 
     if (!registered) {
@@ -216,16 +244,12 @@ export class AgentLoop {
       return { content: errMsg, isError: true };
     }
 
-    console.error(`[tool] Calling ${toolName}(${JSON.stringify(call.function.arguments)})`);
-
     try {
       const result = await registered.handler(call.function.arguments);
       return { content: result, isError: false };
     } catch (err) {
       const errMsg = `Tool "${toolName}" threw an error: ${String(err)}`;
       console.error(`[tool] ${errMsg}`);
-      // Return the error as the tool result — the model sees this and can decide
-      // whether to retry with different args, try a different approach, or give up.
       return { content: errMsg, isError: true };
     }
   }
