@@ -793,6 +793,7 @@ src/
     verify_plugin.rs   — P10: VerificationStep runner system
     subagent_plugin.rs — P8: sub-agent spawn + result integration system
     orchestrator_plugin.rs — P7: retry logic + approval gate system
+    commands_plugin.rs — slash command parsing + dispatch
     agent_plugin.rs    — glue: spawns AgentEntity, drives TurnPhase FSM
 
   provider/
@@ -1335,9 +1336,258 @@ only the scheduler and the ECS core, adding ~2 MB to the binary.
 - [ ] **Sub-agent isolation**: Sub-agent entities share the parent World. Full
       process-level isolation requires spawning a child process instead. Decide
       per threat model.
-- [ ] **TUI live view**: `TracePlugin` could push events to a `bevy_ui`-free
-      terminal renderer (e.g. `ratatui`) as a separate system listening on
-      `StreamChunkReceived` events.
+- [x] **TUI live view**: `TuiPlugin` (ratatui) renders live output in the
+      terminal. Decided: use `ratatui`. See the TUI section below.
+
+---
+
+## Slash Commands
+
+Slash commands are typed in the **TUI input bar** while the agent is running or
+idle. They are processed locally by the harness — they are never sent to the
+model as conversation messages.
+
+### Input Bar
+
+The TUI input bar sits at the bottom of the screen (above the status bar). It
+activates when the user presses `/`. The typed command is parsed and dispatched
+immediately on `Enter`; `Escape` cancels.
+
+`TuiPlugin` owns the input bar widget and the command dispatch loop.
+
+### Built-in Commands
+
+| Command | Effect |
+|---------|--------|
+| `/help` | Print all available slash commands with one-line descriptions in the conversation pane |
+| `/skill <name>` | Load `~/.abt/skills/<name>.md` and set `ActiveSkill` on the current `AgentEntity`; rebuilds `SystemPrompt` next tick |
+| `/clear` | Discard conversation history (fires `ClearHistory` event); optionally runs P3 compaction first to preserve a summary |
+| `/status` | Print current agent state: turn count, token count, active skill, model, provider endpoint, `TurnPhase` |
+| `/mcp` | List connected MCP servers, their status (connected / error), and the number of tools each exposes |
+
+### Architecture
+
+Slash commands are implemented as a **`CommandsPlugin`** that:
+
+1. Receives a `SlashCommandEntered { raw: String }` event from `TuiPlugin`.
+2. Parses the raw string into a `SlashCommand` enum.
+3. Dispatches the appropriate action — either mutating ECS state directly
+   (e.g. writing `ActiveSkill`) or emitting a dedicated event.
+
+No `AgentEntity` components are written directly from the input bar handler;
+mutations always go through the normal event pipeline so other plugins react
+correctly (e.g. `SkillsPlugin` rebuilds `SystemPrompt` on `ActiveSkill` change).
+
+```rust
+// components.rs / events
+#[derive(Event)] pub struct SlashCommandEntered { pub raw: String }
+#[derive(Event)] pub struct ClearHistory        { pub agent: Entity }
+#[derive(Event)] pub struct SkillChanged        { pub agent: Entity, pub name: String }
+
+pub enum SlashCommand {
+    Help,
+    Skill(String),
+    Clear,
+    Status,
+    Mcp,
+    Unknown(String),
+}
+```
+
+### Interaction with TurnPhase
+
+Slash commands are accepted in **any** `TurnPhase`. Commands that mutate state
+(`/skill`, `/clear`) take effect at the start of the next turn cycle
+(i.e. when the current phase reaches `Idle` or `Compacting`), so they never
+interrupt an in-flight provider call or tool dispatch.
+
+`/clear` mid-turn queues a `ClearHistory` event; `compact_system` drains it
+at the next `Compacting` phase.
+
+### TUI Input Bar Integration
+
+```
+user presses /
+  → TuiPlugin activates input bar widget
+  → user types command, presses Enter
+  → TuiPlugin emits SlashCommandEntered { raw }
+  → CommandsPlugin::dispatch_system parses + acts
+  → result printed to conversation pane as [harness] role message
+```
+
+The `[harness]` role is a new `TuiRole` variant — visually distinct from
+`[assistant]`, `[tool]`, and `[thinking]`.
+
+### Module Location
+
+```
+src/plugins/commands_plugin.rs   — CommandsPlugin + dispatch_system
+```
+
+No separate `src/commands/` directory; all logic fits in one file for
+built-ins-only scope.
+
+---
+
+## TUI — ratatui
+
+The terminal UI is built with **ratatui**. It is a separate plugin (`TuiPlugin`)
+that subscribes to ECS events and renders a live view of the agent loop without
+touching any other plugin's systems.
+
+### Why ratatui
+
+- Pure Rust, no system dependencies, cross-platform.
+- Decoupled from Bevy: renders from ECS events only — no component queries.
+- No extra threads needed: the ratatui draw call runs in a dedicated
+  `TuiPlugin` system each tick.
+
+### Layout
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  abt  [model: qwen2.5-coder:7b]  [turn 3/20]  [tokens: 1.2k]│  ← header bar
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  [assistant]  I'll read src/lib.rs first.                   │  ← conversation
+│  [tool]       read_file("src/lib.rs")  →  OK (312 tokens)   │    scroll pane
+│  [thinking]   The struct layout suggests…                   │
+│  [assistant]  Here is the refactored version:               │
+│               …streaming text appears here live…            │
+│  [harness]    Skill changed → rust-refactor                 │  ← slash cmd output
+│                                                             │
+├─────────────────────────────────────────────────────────────┤
+│  [P5 GATE]  shell("cargo test")  Allow? [Y/n]               │  ← approval gate
+│             (only visible when interactive permission mode)  │    (optional row)
+├─────────────────────────────────────────────────────────────┤
+│  > /skill rust-refactor_                                    │  ← input bar
+│    (activates on `/`; Enter dispatches; Escape cancels)     │
+├─────────────────────────────────────────────────────────────┤
+│  [verify]  cargo test ✓   cargo clippy ✓                    │  ← status bar
+│  [hooks]   PostToolUse: log-tool-use.sh ✓                   │
+│  [trace]   ~/.abt/traces/20260105_abc123.jsonl              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Events Consumed
+
+`TuiPlugin` systems read these events (read-only; no component mutation):
+
+| Event | Rendered as |
+|-------|------------|
+| `StreamChunkReceived` | Appends delta content to conversation pane live |
+| `ToolCallsReady` | Shows pending tool calls with `[dispatching…]` indicator |
+| `ToolCallDone` | Updates tool row with result summary + duration |
+| `AllToolsDone` | Clears dispatching indicators |
+| `HookFired` | Appends hook row to status bar |
+| `VerificationPassed` / `VerificationFailed` | Updates verify row in status bar |
+| `TraceFlushed` | Updates trace path in status bar |
+| `SubAgentSpawned` / `SubAgentDone` | Shows sub-agent lifecycle in conversation pane |
+
+`TuiPlugin` **emits** one event:
+
+| Event | When |
+|-------|------|
+| `SlashCommandEntered { raw: String }` | User presses Enter in the input bar |
+
+`TuiPlugin` also reads the `TurnPhase` component on `AgentEntity` entities
+to display the current phase in the header.
+
+### TUI State
+
+`TuiPlugin` maintains its own private resource (not shared with other plugins):
+
+```rust
+#[derive(Resource)]
+pub struct TuiState {
+    pub terminal:     ratatui::Terminal<CrosstermBackend<Stdout>>,
+    pub messages:     Vec<TuiMessage>,   // conversation pane buffer
+    pub status:       StatusBar,         // verify + hook + trace rows
+    pub scroll:       usize,             // conversation pane scroll offset
+    pub pending_gate: Option<GatePrompt>, // P5 approval gate prompt
+}
+
+pub struct TuiMessage {
+    pub role:    TuiRole,   // Assistant | Tool | Thinking | SubAgent
+    pub content: String,
+    pub meta:    String,    // e.g. "312 tokens", "1.4s", "✓"
+}
+```
+
+`TuiState` is the only ratatui state. All other plugins remain unaware of the
+TUI — they just fire events as always.
+
+### Streaming Text
+
+`StreamChunkReceived` events carry `Delta { content, thinking, tool_calls }`.
+`TuiPlugin::handle_stream_chunks_system` appends `content` to the last
+`Assistant` message in `TuiState.messages` and calls `terminal.draw()` each
+tick, producing a live typewriter effect.
+
+`thinking` tokens are appended to a collapsible `[thinking]` row (dimmed by
+default; toggle with `t`).
+
+### P5 Approval Gate in TUI
+
+When `permissions.mode = "interactive"` and a tool call is denied by the
+pattern gate, `TuiPlugin` renders the `GatePrompt` row at the bottom. The user
+presses `y` / `n` (or `Enter` to accept the default). The answer is sent back
+via a `GateResponse` channel that `spawn_tool_calls_system` reads before
+deciding to spawn or deny the `ToolCallEntity`.
+
+### Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Scroll conversation pane |
+| `t` | Toggle thinking token visibility |
+| `/` | Activate input bar for slash command entry |
+| `Escape` | Cancel input bar |
+| `q` | Quit (only after `TurnPhase::Done` or `Failed`) |
+| `y` / `n` | Approve / deny gate prompt (interactive mode only) |
+
+### Headless Mode
+
+Set `config.toml [ui] tui = false` (or pass `--no-tui`) to disable `TuiPlugin`
+entirely. In headless mode the binary falls back to plain stdout/stderr output
+(delta content → stdout, thinking → stderr), which is the existing behaviour
+used by CI and scripting.
+
+### Plugin Registration
+
+```rust
+// main.rs
+if !cli.no_tui && config.ui.tui {
+    app.add_plugins(TuiPlugin);
+}
+```
+
+`TuiPlugin` is the last plugin added. It has no systems that write Components
+or Resources owned by other plugins, so ordering constraints are minimal.
+
+### Module Location
+
+```
+src/plugins/tui_plugin.rs    — TuiPlugin impl + all TUI systems
+src/plugins/commands_plugin.rs — CommandsPlugin + dispatch_system (see Slash Commands section)
+src/tui/
+  mod.rs                     — re-exports
+  layout.rs                  — ratatui widget composition
+  state.rs                   — TuiState, TuiMessage, StatusBar
+  gate.rs                    — GatePrompt + GateResponse channel
+  input.rs                   — input bar widget + SlashCommandEntered emit
+```
+
+---
+
+## Dependencies (updated)
+
+All prior dependencies retained. New addition:
+
+| Crate | Purpose |
+|-------|---------|
+| `ratatui` | Terminal UI rendering |
+| `crossterm` | Cross-platform terminal backend for ratatui |
 
 ---
 
@@ -1354,4 +1604,6 @@ only the scheduler and the ECS core, adding ~2 MB to the binary.
 | M7 | `TracePlugin` + `StatePlugin`: JSONL flush, plan persistence | P6, P10 |
 | M8 | `HooksPlugin` + `VerifyPlugin`: hooks + verification steps | P7, P10 |
 | M9 | `SubagentPlugin`: child entity spawn + result collection | P8 |
-| M10 | CLI polish, cross-platform release, integration tests | all |
+| M10 | `TuiPlugin`: ratatui live view, input bar, gate prompts, headless mode | UI |
+| M11 | `CommandsPlugin`: /help, /skill, /clear, /status, /mcp | slash cmds |
+| M12 | CLI polish, cross-platform release, integration tests | all |
