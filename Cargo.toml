@@ -1,0 +1,14 @@
+[package]
+name = "abt"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "abt"
+path = "src/main.rs"
+
+[dependencies]
+bevy_ecs  = { version = "0.20.1", default-features = false }
+bevy_app  = { version = "0.20.1", default-features = false }
+uuid      = { version = "1", features = ["v4"] }
+thiserror = "2"

@@ -12,7 +12,7 @@ The binary speaks the **OpenAI Chat Completions API** (streaming + tool calls) a
 
 ## Status
 
-Design phase. `design_ecs.md` is the authoritative, iteratively-growing architecture document. Development has not started yet.
+M1 complete. `design_ecs.md` is the authoritative, iteratively-growing architecture document.
 
 ## The 10 Harness Primitives
 
@@ -166,8 +166,8 @@ Module layout: `src/plugins/tui_plugin.rs`, `src/tui/{layout,state,gate}.rs`
 
 | Crate | Purpose |
 |-------|---------|
-| `bevy_ecs` | ECS World, Components, Systems, Events |
-| `bevy_app` | App builder + scheduler (MinimalPlugins) |
+| `bevy_ecs` | ECS World, Components, Systems, Messages |
+| `bevy_app` | App builder + scheduler (ScheduleRunnerPlugin) |
 | `crossbeam-channel` | sync↔async bridge |
 | `tokio` | async runtime |
 | `reqwest` | HTTP client for provider SSE |
@@ -178,3 +178,37 @@ Module layout: `src/plugins/tui_plugin.rs`, `src/tui/{layout,state,gate}.rs`
 | `tracing` / `tracing-appender` | structured logging |
 | `ratatui` | terminal UI rendering |
 | `crossterm` | cross-platform terminal backend for ratatui |
+
+## Milestone Development Process
+
+Each milestone follows this sequence:
+
+### 1. Read before starting
+Always read `CLAUDE.md`, `dev_log.md`, and `dev_plan_m<N>.md` at the start of a session before writing any code.
+
+### 2. Implement per the plan
+Follow `dev_plan_m<N>.md` step by step. Create a task list to track each step. Mark tasks completed as each step finishes — do not batch.
+
+### 3. Build gate
+Run `cargo build`. Fix all errors and warnings before proceeding. Zero warnings is the bar — treat warnings as errors.
+
+### 4. Test gate
+Run `cargo test --lib`. All tests in the milestone plan must pass before the milestone is marked complete.
+
+### 5. Run gate
+Run `cargo run` and confirm it exits cleanly with the expected behaviour described in the plan's acceptance criteria.
+
+### 6. No rendering check
+Run `cargo tree | grep bevy_render` — output must be empty.
+
+### 7. Update dev_log.md
+- Change the milestone row status from `not started` → `complete`
+- Add a `### Notes` section under the milestone entry recording:
+  - Any API differences from the plan (crate version changes, renamed types, etc.)
+  - Any non-obvious implementation decisions made
+
+### 8. Commit
+Stage only source files (`src/`, `Cargo.toml`, `Cargo.lock`, `dev_log.md`). Do not commit `target/` or `.cargo/config.toml` if it contains machine-specific paths.
+
+### Windows build environment (this machine)
+Before building, confirm `.cargo/config.toml` specifies the MSVC linker. If Defender ASR blocks freshly compiled executables, re-add the exclusions documented in `references/defender_asr_exclusions.md` using an elevated PowerShell. See that file for the full list of paths required.
