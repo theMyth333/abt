@@ -1324,18 +1324,22 @@ only the scheduler and the ECS core, adding ~2 MB to the binary.
 
 ## Open Questions (ECS-specific)
 
-- [ ] **Tick rate**: run the scheduler at `bevy::app::ScheduleRunnerPlugin` fixed
-      interval (e.g. 60 Hz polling channels) or `EventLoop`-driven (fire on event)?
-      Event-driven avoids busy-wait but requires manual wakeup from async channels.
-- [ ] **World persistence**: ECS World lives in memory. On crash, only the
-      `StateStore` JSONL on disk allows resume. Should `PlanState` component be
-      checkpointed more aggressively?
-- [ ] **Parallel tool dispatch**: Bevy can run non-conflicting systems in parallel.
-      Multiple `ToolCallEntity`s with no shared components can dispatch concurrently
-      today — verify this is desirable vs. serialized tool calls.
-- [ ] **Sub-agent isolation**: Sub-agent entities share the parent World. Full
-      process-level isolation requires spawning a child process instead. Decide
-      per threat model.
+- [x] **Tick rate**: Use `ScheduleRunnerPlugin::run_loop(Duration::from_millis(16))`
+      for fixed-rate polling (~60 Hz). Simple, predictable; idle CPU overhead is
+      negligible while real I/O is in flight. Revisit event-driven only if idle
+      CPU becomes a measurable problem.
+- [x] **World persistence**: Checkpoint `PlanState` after every **tool round**
+      (when all tool calls in one batch complete), not after every individual tool
+      call. Per-tool-call is more resilient but adds I/O on every result; per-round
+      is simpler and the cost of re-running a partial round after a crash is low.
+- [x] **Parallel tool dispatch**: Tool calls within a single turn are **serialized**
+      (one at a time). Concurrent dispatch is free in Bevy but write+exec ordering
+      bugs (e.g. `write_file` followed by `shell`) make it unsafe as a default.
+      Opt-in concurrency for read-only tools can be added later.
+- [x] **Sub-agent isolation**: Sub-agents run **in-process** as entities in the
+      same ECS World. Process-level isolation adds IPC complexity with no benefit
+      when all skills are operator-controlled files in `~/.abt/skills/`. Revisit
+      if untrusted sub-agent code ever becomes a requirement.
 - [x] **TUI live view**: `TuiPlugin` (ratatui) renders live output in the
       terminal. Decided: use `ratatui`. See the TUI section below.
 

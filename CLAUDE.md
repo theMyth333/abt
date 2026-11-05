@@ -148,6 +148,16 @@ plain stdout/stderr (streaming content → stdout, thinking → stderr).
 
 Module layout: `src/plugins/tui_plugin.rs`, `src/tui/{layout,state,gate}.rs`
 
+## Open Design Questions
+
+| # | Question | Status |
+|---|----------|--------|
+| Q1 | **Tick rate**: Run the scheduler at a fixed interval (e.g. 60 Hz polling channels via `ScheduleRunnerPlugin`) or event-driven (fire on event)? Event-driven avoids busy-wait but requires manual wakeup from async channels. | **Decided: fixed-rate polling** |
+| Q2 | **World persistence**: ECS World lives in memory. On crash, only the `StateStore` JSONL on disk allows resume. Should `PlanState` be checkpointed more aggressively (e.g. after every turn, not just every tool round)? | **Decided: per-tool-round** |
+| Q3 | **Parallel tool dispatch**: Multiple `ToolCallEntity`s with no shared components can dispatch concurrently today via Bevy's scheduler. Is concurrent tool dispatch desirable, or should tool calls be serialized per agent? | **Decided: serialize within a turn** |
+| Q4 | **Sub-agent isolation**: Sub-agent entities share the parent World. Full process-level isolation requires spawning a child process instead. Decision depends on threat model — is in-process isolation sufficient? | **Decided: in-process** |
+| Q5 | **TUI live view**: Use `ratatui` + `crossterm` for the terminal UI. | **Decided: ratatui** |
+
 ## Key Dependencies
 
 | Crate | Purpose |
